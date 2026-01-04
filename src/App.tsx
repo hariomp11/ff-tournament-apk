@@ -12,6 +12,7 @@ import {
 } from "react-router-dom";
 import { db } from "./db";
 import { User, UserRole } from "./types";
+import { account } from "./appwrite"; // ✅ ADDED
 
 /* ================= AUTH CONTEXT ================= */
 
@@ -81,19 +82,47 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  /* Restore session */
+  /* ================= RESTORE SESSION (FIXED) ================= */
   useEffect(() => {
-    const saved = db.getCurrentUser();
-    if (saved) {
-      const latest = db.getUsers().find((u) => u.id === saved.id);
-      if (latest && !latest.isBlocked) {
-        setUser(latest);
-        db.setCurrentUser(latest);
-      } else {
+    const restoreSession = async () => {
+      try {
+        // 🔹 Check Appwrite session (Google / Email)
+        const awUser = await account.get();
+
+        // 🔹 Sync with local DB
+        const users = db.getUsers();
+        let localUser = users.find(u => u.email === awUser.email);
+
+        // 🔹 Create local user if first-time Google login
+        if (!localUser) {
+          localUser = {
+            id: awUser.$id,
+            name: awUser.name || "Player",
+            email: awUser.email,
+            phone: "",
+            password: "",
+            role:
+              awUser.email === ADMIN_EMAIL
+                ? UserRole.ADMIN
+                : UserRole.PLAYER,
+            walletBalance: 0,
+            isBlocked: false,
+            createdAt: Date.now(),
+          };
+          db.setUsers([...users, localUser]);
+        }
+
+        setUser(localUser);
+        db.setCurrentUser(localUser);
+      } catch {
+        setUser(null);
         db.setCurrentUser(null);
+      } finally {
+        setLoading(false);
       }
-    }
-    setTimeout(() => setLoading(false), 1200);
+    };
+
+    restoreSession();
   }, []);
 
   /* ================= LOGIN ================= */
@@ -103,8 +132,6 @@ const App: React.FC = () => {
 
     if (!found) return false;
     if (found.isBlocked) return false;
-
-    // ✅ STRICT PASSWORD CHECK
     if (found.password !== password) return false;
 
     const role =
@@ -146,7 +173,10 @@ const App: React.FC = () => {
   };
 
   /* ================= LOGOUT ================= */
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await account.deleteSession("current"); // optional but correct
+    } catch {}
     setUser(null);
     db.setCurrentUser(null);
   };
@@ -180,112 +210,21 @@ const App: React.FC = () => {
             />
 
             {/* Player */}
-            <Route
-              path="/home"
-              element={
-                <ProtectedRoute>
-                  <HomeScreen />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/match/:id"
-              element={
-                <ProtectedRoute>
-                  <MatchDetailsScreen />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/wallet"
-              element={
-                <ProtectedRoute>
-                  <WalletScreen />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/deposit"
-              element={
-                <ProtectedRoute>
-                  <DepositScreen />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/withdraw"
-              element={
-                <ProtectedRoute>
-                  <WithdrawScreen />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/my-matches"
-              element={
-                <ProtectedRoute>
-                  <MyMatchesScreen />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/profile"
-              element={
-                <ProtectedRoute>
-                  <ProfileScreen />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/home" element={<ProtectedRoute><HomeScreen /></ProtectedRoute>} />
+            <Route path="/match/:id" element={<ProtectedRoute><MatchDetailsScreen /></ProtectedRoute>} />
+            <Route path="/wallet" element={<ProtectedRoute><WalletScreen /></ProtectedRoute>} />
+            <Route path="/deposit" element={<ProtectedRoute><DepositScreen /></ProtectedRoute>} />
+            <Route path="/withdraw" element={<ProtectedRoute><WithdrawScreen /></ProtectedRoute>} />
+            <Route path="/my-matches" element={<ProtectedRoute><MyMatchesScreen /></ProtectedRoute>} />
+            <Route path="/profile" element={<ProtectedRoute><ProfileScreen /></ProtectedRoute>} />
 
             {/* Admin */}
-            <Route
-              path="/admin"
-              element={
-                <ProtectedRoute adminOnly>
-                  <AdminDashboard />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/admin/create-match"
-              element={
-                <ProtectedRoute adminOnly>
-                  <CreateMatchScreen />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/admin/manage-match/:id"
-              element={
-                <ProtectedRoute adminOnly>
-                  <ManageMatchScreen />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/admin/payments"
-              element={
-                <ProtectedRoute adminOnly>
-                  <PaymentApprovals />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/admin/withdraws"
-              element={
-                <ProtectedRoute adminOnly>
-                  <WithdrawApprovals />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/admin/users"
-              element={
-                <ProtectedRoute adminOnly>
-                  <UserManagement />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/admin" element={<ProtectedRoute adminOnly><AdminDashboard /></ProtectedRoute>} />
+            <Route path="/admin/create-match" element={<ProtectedRoute adminOnly><CreateMatchScreen /></ProtectedRoute>} />
+            <Route path="/admin/manage-match/:id" element={<ProtectedRoute adminOnly><ManageMatchScreen /></ProtectedRoute>} />
+            <Route path="/admin/payments" element={<ProtectedRoute adminOnly><PaymentApprovals /></ProtectedRoute>} />
+            <Route path="/admin/withdraws" element={<ProtectedRoute adminOnly><WithdrawApprovals /></ProtectedRoute>} />
+            <Route path="/admin/users" element={<ProtectedRoute adminOnly><UserManagement /></ProtectedRoute>} />
 
             <Route path="/" element={<Navigate to="/home" />} />
           </Routes>
@@ -298,4 +237,3 @@ const App: React.FC = () => {
 };
 
 export default App;
-
