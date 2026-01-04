@@ -56,7 +56,7 @@ const DepositScreen: React.FC = () => {
 />
 
         </div>
-        <p className="text-sm font-bold text-purple-400">UPI ID: novaarena@upi</p>
+        <p className="text-sm font-bold text-purple-400">UPI ID: hariompatidar33@ibl</p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
