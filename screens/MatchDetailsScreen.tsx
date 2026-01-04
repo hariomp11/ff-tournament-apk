@@ -1,170 +1,204 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { db } from '../db';
+import { databases, Query, ID } from '../appwrite';
 import { useAuth } from '../App';
-import { Match, TransactionType, TransactionStatus, MatchStatus } from '../types';
+
+const DATABASE_ID = import.meta.env.VITE_DATABASE_ID;
+const MATCHES_COLLECTION_ID = 'matches';
+const WALLETS_COLLECTION_ID = 'wallets';
+const JOINS_COLLECTION_ID = 'match_joins';
 
 const MatchDetailsScreen: React.FC = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user, refreshUser } = useAuth();
-  const [match, setMatch] = useState<Match | null>(null);
-  const [joined, setJoined] = useState(false);
+  const { user } = useAuth();
 
+  const [match, setMatch] = useState<any>(null);
+  const [joined, setJoined] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [joining, setJoining] = useState(false);
+
+  /* ================= LOAD MATCH ================= */
   useEffect(() => {
-    const found = db.getMatches().find(m => m.id === id);
-    if (found) {
-      setMatch(found);
-      const joinedList = db.getJoinedMatches();
-      setJoined(joinedList.some(j => j.matchId === id && j.userId === user?.id));
-    }
+    const loadMatch = async () => {
+      try {
+        const res = await databases.getDocument(
+          DATABASE_ID,
+          MATCHES_COLLECTION_ID,
+          id!
+        );
+        setMatch(res);
+
+        if (user) {
+          const joinedRes = await databases.listDocuments(
+            DATABASE_ID,
+            JOINS_COLLECTION_ID,
+            [
+              Query.equal('userId', user.$id),
+              Query.equal('matchId', id!)
+            ]
+          );
+          setJoined(joinedRes.total > 0);
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadMatch();
   }, [id, user]);
 
-  const handleJoin = () => {
+  /* ================= JOIN MATCH ================= */
+  const handleJoin = async () => {
     if (!user || !match) return;
 
-    if (user.walletBalance < match.entryFee) {
-      alert("Insufficient Balance! Please add money to your wallet.");
-      navigate('/wallet');
-      return;
-    }
+    setJoining(true);
 
-    if (match.joinedCount >= match.totalSlots) {
-      alert("Match is Full!");
-      return;
-    }
-
-    if (confirm(`Confirm Join Fee: ₹${match.entryFee}?`)) {
-      // 1. Update user balance
-      const allUsers = db.getUsers();
-      const updatedUsers = allUsers.map(u => 
-        u.id === user.id ? { ...u, walletBalance: u.walletBalance - match.entryFee } : u
+    try {
+      // 1️⃣ Already joined check
+      const existing = await databases.listDocuments(
+        DATABASE_ID,
+        JOINS_COLLECTION_ID,
+        [
+          Query.equal('userId', user.$id),
+          Query.equal('matchId', match.$id)
+        ]
       );
-      db.setUsers(updatedUsers);
 
-      // 2. Add transaction
-      const txs = db.getTransactions();
-      txs.push({
-        id: Math.random().toString(36).substr(2, 9),
-        userId: user.id,
-        amount: match.entryFee,
-        type: TransactionType.JOIN_FEE,
-        status: TransactionStatus.APPROVED,
-        timestamp: Date.now(),
-        note: `Joined Match: ${match.title}`
-      });
-      db.setTransactions(txs);
+      if (existing.total > 0) {
+        alert('You already joined this match');
+        return;
+      }
 
-      // 3. Register join
-      const joinedList = db.getJoinedMatches();
-      joinedList.push({ matchId: match.id, userId: user.id, joinedAt: Date.now() });
-      db.setJoinedMatches(joinedList);
-
-      // 4. Update match count
-      const matches = db.getMatches();
-      const updatedMatches = matches.map(m => 
-        m.id === match.id ? { ...m, joinedCount: m.joinedCount + 1 } : m
+      // 2️⃣ Wallet fetch
+      const walletRes = await databases.listDocuments(
+        DATABASE_ID,
+        WALLETS_COLLECTION_ID,
+        [Query.equal('userId', user.$id)]
       );
-      db.setMatches(updatedMatches);
 
-      refreshUser();
+      if (walletRes.total === 0) {
+        alert('Wallet not found');
+        navigate('/wallet');
+        return;
+      }
+
+      const wallet = walletRes.documents[0];
+
+      // 3️⃣ Balance check
+      if (wallet.balance < match.entryFee) {
+        alert('Insufficient balance');
+        navigate('/wallet');
+        return;
+      }
+
+      // 4️⃣ Slot check
+      if (match.joinedCount >= match.totalSlots) {
+        alert('Match is full');
+        return;
+      }
+
+      if (!confirm(`Confirm join fee ₹${match.entryFee}?`)) return;
+
+      // 5️⃣ Deduct wallet
+      await databases.updateDocument(
+        DATABASE_ID,
+        WALLETS_COLLECTION_ID,
+        wallet.$id,
+        { balance: wallet.balance - match.entryFee }
+      );
+
+      // 6️⃣ Create join record
+      await databases.createDocument(
+        DATABASE_ID,
+        JOINS_COLLECTION_ID,
+        ID.unique(),
+        {
+          userId: user.$id,
+          matchId: match.$id,
+          joinedAt: new Date().toISOString()
+        }
+      );
+
+      // 7️⃣ Increment joined count
+      await databases.updateDocument(
+        DATABASE_ID,
+        MATCHES_COLLECTION_ID,
+        match.$id,
+        { joinedCount: match.joinedCount + 1 }
+      );
+
       setJoined(true);
-      alert("Successfully joined match!");
+      setMatch({ ...match, joinedCount: match.joinedCount + 1 });
+
+      alert('Successfully joined match!');
+    } catch (err) {
+      console.error(err);
+      alert('Failed to join match');
+    } finally {
+      setJoining(false);
     }
   };
 
-  if (!match) return <div className="p-10 text-center">Loading...</div>;
+  if (loading || !match) {
+    return <div className="p-10 text-center">Loading...</div>;
+  }
 
+  /* ================= UI ================= */
   return (
     <div className="min-h-screen pb-24">
       <div className="relative h-60 overflow-hidden">
-        <img 
-          src={`https://picsum.photos/seed/${match.id}/600/400`} 
-          className="w-full h-full object-cover brightness-[0.3]" 
-          alt="match cover" 
+        <img
+          src={`https://picsum.photos/seed/${match.$id}/600/400`}
+          className="w-full h-full object-cover brightness-[0.3]"
+          alt="match"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#05010a] to-transparent"></div>
-        <button 
-          onClick={() => navigate(-1)} 
-          className="absolute top-6 left-6 w-10 h-10 bg-black/50 backdrop-blur-md rounded-full flex items-center justify-center border border-white/10"
+        <div className="absolute inset-0 bg-gradient-to-t from-black to-transparent"></div>
+        <button
+          onClick={() => navigate(-1)}
+          className="absolute top-6 left-6 bg-black/50 rounded-full w-10 h-10"
         >
           ←
         </button>
-        <div className="absolute bottom-6 left-6 right-6">
-          <span className="bg-purple-600 text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-widest mb-2 inline-block">
+        <div className="absolute bottom-6 left-6">
+          <span className="bg-purple-600 text-xs px-2 py-0.5 rounded uppercase">
             {match.type}
           </span>
-          <h1 className="text-3xl font-bold font-gaming uppercase leading-tight">{match.title}</h1>
+          <h1 className="text-2xl font-bold uppercase">{match.title}</h1>
         </div>
       </div>
 
-      <div className="px-6 -mt-6 relative z-10 grid gap-6">
-        {/* Quick Stats */}
+      <div className="p-6 grid gap-6">
         <div className="grid grid-cols-3 gap-3">
-          <StatBox label="Entry Fee" value={`₹${match.entryFee}`} color="text-green-400" />
-          <StatBox label="Prize Pool" value={`₹${match.prizePool}`} color="text-yellow-500" />
-          <StatBox label="Slots" value={`${match.joinedCount}/${match.totalSlots}`} color="text-purple-400" />
+          <StatBox label="Entry Fee" value={`₹${match.entryFee}`} />
+          <StatBox label="Prize Pool" value={`₹${match.prizePool}`} />
+          <StatBox label="Slots" value={`${match.joinedCount}/${match.totalSlots}`} />
         </div>
 
-        {/* Room Details (Only if joined and match is starting soon) */}
-        {joined && (
-           <div className="bg-purple-900/20 border border-purple-500/30 rounded-2xl p-4 neon-glow">
-              <h3 className="text-sm font-bold uppercase tracking-widest mb-3 text-purple-400">Room Credentials</h3>
-              {match.roomId ? (
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-[10px] text-gray-500 uppercase">Room ID</p>
-                    <p className="text-lg font-bold font-gaming select-all">{match.roomId}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-gray-500 uppercase">Password</p>
-                    <p className="text-lg font-bold font-gaming select-all">{match.roomPass}</p>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-xs text-gray-500 italic">Room credentials will be revealed 15 minutes before start time.</p>
-              )}
-           </div>
+        {joined && match.roomId && (
+          <div className="bg-purple-900/20 p-4 rounded-xl">
+            <p className="text-xs uppercase text-purple-400">Room ID</p>
+            <p className="font-bold">{match.roomId}</p>
+            <p className="text-xs uppercase text-purple-400 mt-2">Password</p>
+            <p className="font-bold">{match.roomPass}</p>
+          </div>
         )}
-
-        {/* Rules */}
-        <div>
-          <h3 className="text-sm font-bold uppercase tracking-widest mb-3">Match Rules</h3>
-          <ul className="space-y-3 text-sm text-gray-400">
-            <li className="flex gap-3">
-              <span className="text-purple-500">●</span>
-              Emulator players are strictly NOT allowed. Mobile only.
-            </li>
-            <li className="flex gap-3">
-              <span className="text-purple-500">●</span>
-              Teaming or hacking leads to immediate ban and prize forfeiture.
-            </li>
-            <li className="flex gap-3">
-              <span className="text-purple-500">●</span>
-              Share results screenshot within 15 minutes of match completion.
-            </li>
-            <li className="flex gap-3">
-              <span className="text-purple-500">●</span>
-              Join the room at least 5 minutes before scheduled start time.
-            </li>
-          </ul>
-        </div>
       </div>
 
-      {/* Persistent Footer CTA */}
-      <div className="fixed bottom-24 left-6 right-6 z-50">
+      <div className="fixed bottom-24 left-6 right-6">
         {joined ? (
-          <div className="bg-green-500/20 border border-green-500 text-green-400 font-bold py-3 rounded-xl text-center uppercase tracking-widest">
-            Successfully Joined
+          <div className="bg-green-500/20 text-green-400 py-3 rounded-xl text-center">
+            Joined Successfully
           </div>
         ) : (
-          <button 
-            disabled={match.status !== MatchStatus.UPCOMING || match.joinedCount >= match.totalSlots}
+          <button
+            disabled={joining || match.status !== 'upcoming'}
             onClick={handleJoin}
-            className="w-full bg-purple-600 hover:bg-purple-500 disabled:bg-gray-800 disabled:text-gray-500 text-white font-bold py-4 rounded-xl neon-glow transition-all uppercase tracking-[0.2em] shadow-lg shadow-purple-600/30"
+            className="w-full bg-purple-600 py-4 rounded-xl font-bold uppercase disabled:opacity-50"
           >
-            {match.joinedCount >= match.totalSlots ? "Match Full" : `Join Match - ₹${match.entryFee}`}
+            {joining ? 'Joining...' : `Join Match ₹${match.entryFee}`}
           </button>
         )}
       </div>
@@ -172,10 +206,10 @@ const MatchDetailsScreen: React.FC = () => {
   );
 };
 
-const StatBox: React.FC<{ label: string; value: string; color: string }> = ({ label, value, color }) => (
-  <div className="bg-[#0d041a] border border-purple-900/30 rounded-xl p-3 text-center">
-    <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">{label}</p>
-    <p className={`text-sm font-bold ${color}`}>{value}</p>
+const StatBox = ({ label, value }: { label: string; value: string }) => (
+  <div className="bg-[#0d041a] p-3 rounded-xl text-center">
+    <p className="text-xs text-gray-400 uppercase">{label}</p>
+    <p className="font-bold">{value}</p>
   </div>
 );
 
