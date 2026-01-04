@@ -1,0 +1,7 @@
+{
+  "name": "Nova Arena - Free Fire Esports",
+  "description": "A premium skill-based esports tournament platform for Free Fire players with manual wallet management and admin controls.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
