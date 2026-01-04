@@ -1,10 +1,10 @@
-
 import React, { useState, useEffect, createContext, useContext } from 'react';
-import { HashRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { User, UserRole } from './types';
 import { db } from './db';
 
-// --- Context ---
+/* ================= AUTH CONTEXT ================= */
+
 interface AuthContextType {
   user: User | null;
   login: (email: string, pass: string) => Promise<boolean>;
@@ -16,20 +16,32 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within an AuthProvider');
-  return context;
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used inside AuthProvider');
+  return ctx;
 };
 
-// --- Protected Route ---
-const ProtectedRoute: React.FC<{ children: React.ReactNode; adminOnly?: boolean }> = ({ children, adminOnly }) => {
+/* ================= PROTECTED ROUTE ================= */
+
+const ADMIN_EMAIL = 'gameversenexus@gmail.com';
+
+const ProtectedRoute: React.FC<{
+  children: React.ReactNode;
+  adminOnly?: boolean;
+}> = ({ children, adminOnly = false }) => {
   const { user } = useAuth();
+
   if (!user) return <Navigate to="/login" replace />;
-  if (adminOnly && user.role !== UserRole.ADMIN) return <Navigate to="/home" replace />;
+
+  if (adminOnly && user.email !== ADMIN_EMAIL) {
+    return <Navigate to="/home" replace />;
+  }
+
   return <>{children}</>;
 };
 
-// --- Components ---
+/* ================= IMPORT SCREENS ================= */
+
 import Navbar from './components/Navbar';
 import SplashScreen from './screens/SplashScreen';
 import LoginScreen from './screens/LoginScreen';
@@ -41,6 +53,7 @@ import DepositScreen from './screens/DepositScreen';
 import WithdrawScreen from './screens/WithdrawScreen';
 import MyMatchesScreen from './screens/MyMatchesScreen';
 import ProfileScreen from './screens/ProfileScreen';
+
 import AdminDashboard from './screens/admin/AdminDashboard';
 import CreateMatchScreen from './screens/admin/CreateMatchScreen';
 import ManageMatchScreen from './screens/admin/ManageMatchScreen';
@@ -48,77 +61,97 @@ import PaymentApprovals from './screens/admin/PaymentApprovals';
 import WithdrawApprovals from './screens/admin/WithdrawApprovals';
 import UserManagement from './screens/admin/UserManagement';
 
+/* ================= APP ================= */
+
 const App: React.FC = () => {
-  const [user, setUser] = useState<User | null>(db.getCurrentUser());
+  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  /* -------- Restore Session -------- */
   useEffect(() => {
-    // Check session
-    const currentUser = db.getCurrentUser();
-    if (currentUser) {
-      // Sync with latest DB state
-      const allUsers = db.getUsers();
-      const latest = allUsers.find(u => u.id === currentUser.id);
-      if (latest) {
-        setUser(latest);
-        db.setCurrentUser(latest);
+    const savedUser = db.getCurrentUser();
+
+    if (savedUser) {
+      const freshUser = db.getUsers().find(u => u.id === savedUser.id);
+      if (freshUser && !freshUser.isBlocked) {
+        setUser(freshUser);
+        db.setCurrentUser(freshUser);
+      } else {
+        db.setCurrentUser(null);
       }
     }
-    
-    // Fake splash delay
-    setTimeout(() => setLoading(false), 2000);
+
+    setTimeout(() => setLoading(false), 1200);
   }, []);
 
+  /* -------- LOGIN (FIXED) -------- */
   const login = async (email: string, pass: string): Promise<boolean> => {
+    // Clear any old session
+    db.setCurrentUser(null);
+    setUser(null);
+
     const users = db.getUsers();
-    // In this mock, password is just 'password' or same as email for simplicity
     const found = users.find(u => u.email === email);
-    if (found) {
-      if (found.isBlocked) {
-        alert("Your account is blocked. Please contact support.");
-        return false;
-      }
-      setUser(found);
-      db.setCurrentUser(found);
-      return true;
+
+    if (!found) return false;
+    if (found.isBlocked) {
+      alert('Your account is blocked.');
+      return false;
     }
-    return false;
+
+    // STRICT password check
+    if (found.password !== pass) {
+      return false;
+    }
+
+    setUser(found);
+    db.setCurrentUser(found);
+    return true;
   };
 
-  const signup = async (name: string, email: string, phone: string, pass: string) => {
+  /* -------- SIGNUP -------- */
+  const signup = async (
+    name: string,
+    email: string,
+    phone: string,
+    pass: string
+  ) => {
     const users = db.getUsers();
-    if (users.find(u => u.email === email)) throw new Error("User already exists");
-    
+
+    if (users.find(u => u.email === email)) {
+      throw new Error('User already exists');
+    }
+
     const newUser: User = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: crypto.randomUUID(),
       name,
       email,
       phone,
-      role: email.includes('admin') ? UserRole.ADMIN : UserRole.PLAYER,
+      password: pass,
+      role: email === ADMIN_EMAIL ? UserRole.ADMIN : UserRole.PLAYER,
       walletBalance: 0,
       isBlocked: false,
-      createdAt: Date.now()
+      createdAt: Date.now(),
     };
-    
-    const updated = [...users, newUser];
-    db.setUsers(updated);
+
+    db.setUsers([...users, newUser]);
     setUser(newUser);
     db.setCurrentUser(newUser);
   };
 
+  /* -------- LOGOUT -------- */
   const logout = () => {
-    setUser(null);
     db.setCurrentUser(null);
+    setUser(null);
   };
 
+  /* -------- REFRESH USER -------- */
   const refreshUser = () => {
-    if (user) {
-      const users = db.getUsers();
-      const latest = users.find(u => u.id === user.id);
-      if (latest) {
-        setUser(latest);
-        db.setCurrentUser(latest);
-      }
+    if (!user) return;
+    const latest = db.getUsers().find(u => u.id === user.id);
+    if (latest) {
+      setUser(latest);
+      db.setCurrentUser(latest);
     }
   };
 
@@ -129,10 +162,16 @@ const App: React.FC = () => {
       <Router>
         <div className="min-h-screen pb-20">
           <Routes>
-            <Route path="/login" element={user ? <Navigate to="/home" /> : <LoginScreen />} />
-            <Route path="/register" element={user ? <Navigate to="/home" /> : <RegisterScreen />} />
-            
-            {/* Player Routes */}
+            <Route
+              path="/login"
+              element={user ? <Navigate to="/home" /> : <LoginScreen />}
+            />
+            <Route
+              path="/register"
+              element={user ? <Navigate to="/home" /> : <RegisterScreen />}
+            />
+
+            {/* PLAYER ROUTES */}
             <Route path="/home" element={<ProtectedRoute><HomeScreen /></ProtectedRoute>} />
             <Route path="/match/:id" element={<ProtectedRoute><MatchDetailsScreen /></ProtectedRoute>} />
             <Route path="/wallet" element={<ProtectedRoute><WalletScreen /></ProtectedRoute>} />
@@ -140,8 +179,8 @@ const App: React.FC = () => {
             <Route path="/withdraw" element={<ProtectedRoute><WithdrawScreen /></ProtectedRoute>} />
             <Route path="/my-matches" element={<ProtectedRoute><MyMatchesScreen /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute><ProfileScreen /></ProtectedRoute>} />
-            
-            {/* Admin Routes */}
+
+            {/* ADMIN ROUTES */}
             <Route path="/admin" element={<ProtectedRoute adminOnly><AdminDashboard /></ProtectedRoute>} />
             <Route path="/admin/create-match" element={<ProtectedRoute adminOnly><CreateMatchScreen /></ProtectedRoute>} />
             <Route path="/admin/manage-match/:id" element={<ProtectedRoute adminOnly><ManageMatchScreen /></ProtectedRoute>} />
@@ -151,6 +190,7 @@ const App: React.FC = () => {
 
             <Route path="/" element={<Navigate to="/home" />} />
           </Routes>
+
           {user && <Navbar />}
         </div>
       </Router>
