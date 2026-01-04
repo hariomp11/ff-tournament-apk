@@ -49,7 +49,12 @@ const DepositScreen: React.FC = () => {
       <div className="bg-[#0d041a] border border-purple-900/30 rounded-3xl p-6 text-center mb-8">
         <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-4">Scan to Pay</p>
         <div className="w-48 h-48 bg-white p-4 mx-auto rounded-2xl mb-4">
-          <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=upi://pay?pa=novaarena@upi&pn=Nova%20Arena&am=0&cu=INR" alt="upi qr" className="w-full" />
+          <img
+  src="/payments/upi-qr.png"
+  alt="UPI QR"
+  className="w-full"
+/>
+
         </div>
         <p className="text-sm font-bold text-purple-400">UPI ID: novaarena@upi</p>
       </div>
